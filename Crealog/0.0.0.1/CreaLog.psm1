@@ -1,6 +1,25 @@
-﻿function Get-RequestTimeStamp {
-$offset=((get-date).GetDateTimeFormats()[94] -split "\+"|select -last 1) -split "\:"|select -First 1
-(get-date).AddHours(-$offset).GetDateTimeFormats()[94] -split "\+"|select -first 1
+﻿#region Helperfunctions
+$TimeStampIndex=(Get-DateTimeFormats|Where-Object {$_ -match "\d{4}-\d{2}-\d{2}T\d{2}\:\d{2}\:\d{2}\.\d{7}"}|Select-Object -first 1).substring(0,3) -as [int]
+$CrealogAPIEndpoint="IsYetToBeSet"
+
+function Get-DateTimeFormats {
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSUseSingularNouns", Scope="Function", Target="*")]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSUseDeclaredVarsMoreThanAssignments", Scope="Function", Target="*")]
+Param()
+    $i=0
+    (get-date).GetDateTimeFormats().foreach({"{0:D3} {1}" -f $i,$_;$i++})
+}
+
+function Convert-SecurStringToPlainText {
+Param([Parameter(Mandatory=$true,ValueFromPipeline=$true)][system.security.securestring]$Password)
+$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+}
+
+function Get-RequestTimeStamp {
+Param([int]$index = $TimeStampIndex)
+$offset=((get-date).GetDateTimeFormats()[$index] -split "\+"|Select-Object -last 1) -split "\:"|Select-Object -First 1
+(get-date).AddHours(-$offset).GetDateTimeFormats()[$index] -split "\+"|Select-Object -first 1
 }
 
 function New-SWRandomPassword {
@@ -44,7 +63,7 @@ function New-SWRandomPassword {
        http://blog.simonw.se/powershell-generating-random-password-for-active-directory/
    
     #>
-    [CmdletBinding(DefaultParameterSetName='FixedLength',ConfirmImpact='None')]
+    [CmdletBinding(DefaultParameterSetName='FixedLength',ConfirmImpact='low',SupportsShouldProcess=$true)]
     [OutputType([String])]
     Param
     (
@@ -98,7 +117,7 @@ function New-SWRandomPassword {
             [char[][]]$CharGroups = $InputStrings
 
             # Create char array containing all chars
-            $AllChars = $CharGroups | ForEach-Object {[Char[]]$_}
+            $AllChars = $CharGroups.ForEach({[Char[]]$_})
 
             # Set password length
             if($PSCmdlet.ParameterSetName -eq 'RandomLength')
@@ -136,7 +155,17 @@ function New-SWRandomPassword {
                 }
                 $Password.Add($Index,$AllChars[((Get-Seed) % $AllChars.Count)])
             }
-            Write-Output -InputObject $(-join ($Password.GetEnumerator() | Sort-Object -Property Name | Select-Object -ExpandProperty Value))
+            if ($PSCmdlet.ShouldProcess("Securestring","Create") ){
+                Write-Output -InputObject $((-join ($Password.GetEnumerator() | Sort-Object -Property Name | Select-Object -ExpandProperty Value)).Foreach({
+                    $securestring=[System.Security.SecureString]::New()
+                    foreach ($char in $a.ToCharArray()) {
+                        $securestring.AppendChar($char)
+                    }
+                    $securestring
+                }))
+            } else {
+                write-verbose "No Securestring has been created" -Verbose
+            }
         }
     }
 }
@@ -148,9 +177,10 @@ Param(
     [String]$Request
 )
     if ($PSCmdlet.ShouldProcess("$request","Invoke")) {
-        convertfrom-json (Invoke-WebRequest -UseBasicParsing $APIEndpoint -ContentType "application/json" -Method POST -Body $Request|select -expand Content)
+        convertfrom-json (Invoke-WebRequest -UseBasicParsing $CrealogAPIEndpoint -ContentType "application/json" -Method POST -Body $Request|Select-Object -expand Content)
     }#endif
 }
+#endregion
 
 function Get-mCRUser {
 [Cmdletbinding(SupportsShouldProcess = $true,DefaultParameterSetName='all')]
@@ -192,6 +222,7 @@ Param(
     [ValidateSet("OP","PM")]
     $WebuserRoles
     ,
+    [System.Security.SecureString]
     [Parameter(Mandatory=$false)]
     $WebuserPassword
     ,
@@ -208,7 +239,7 @@ Param(
 "Function":"CreateWebuser",
 "CompanyID":"$CompanyID",
 "WebuserID":"$($Aduser.SamAccountName)",
-"WebuserPassword":"$WebuserPassword",
+"WebuserPassword":"$($WebuserPassword|Convert-SecurStringToPlainText)",
 "WebuserFirstname":"$($Aduser.GivenName)",
 "WebuserLastname":"$($Aduser.SurName)",
 "WebuserEmail":"$($Aduser.Mail)",
@@ -244,9 +275,6 @@ Param(
     [Parameter(Mandatory=$false)]
     [ValidateSet("OP","PM")]
     $WebuserRoles
-    ,
-    [Parameter(Mandatory=$false)]
-    $WebuserPassword
     ,
     [Parameter(Mandatory=$false)]
     $CompanyID
